@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Steam Account Switcher</title>
+    <link rel="icon" href="data:,">
+    <script src="/assets/static/libs/vue.global.prod.js"></script>
+    <script src="/assets/static/libs/naive-ui.js"></script>
+    <link rel="stylesheet" href="/assets/static/css/style.css">
+</head>
+<body>
+    <div id="app">
+        <n-message-provider>
+            <n-dialog-provider>
+                <n-notification-provider>
+                    <n-config-provider>
+                        <n-spin :show="loading" description="加载中...">
+                            <div class="container" @contextmenu="handleContainerContextMenu">
+                                <n-empty 
+                                    v-if="!accounts.length && !loading"
+                                    description="暂无账号,右键点击添加"
+                                >
+                                    <template #extra>
+                                        <n-button @click="showAddDialog">
+                                            添加账号
+                                        </n-button>
+                                    </template>
+                                </n-empty>
+
+                                <n-data-table
+                                    v-else
+                                    :columns="columns"
+                                    :data="accounts"
+                                    :loading="loading"
+                                    :row-props="rowProps"
+                                    @contextmenu="handleContextMenu"
+                                    @dblclick="handleLogin"
+                                >
+                                    <template #empty>
+                                        <n-empty description="暂无数据" />
+                                    </template>
+                                </n-data-table>
+
+                                <n-dropdown
+                                    :show="contextMenu.visible"
+                                    :options="contextMenuOptions"
+                                    :x="contextMenu.x"
+                                    :y="contextMenu.y"
+                                    placement="bottom-start"
+                                    trigger="manual"
+                                    @select="handleContextMenuSelect"
+                                    @clickoutside="contextMenu.visible = false">
+                                </n-dropdown>
+
+                                <n-modal v-model:show="addDialogVisible">
+                                    <n-card style="width: 400px">
+                                        <template #header>
+                                            {{ newAccount.username ? '编辑账号' : '添加账号' }}
+                                        </template>
+                                        <n-form
+                                            ref="formRef"
+                                            :model="newAccount"
+                                            :rules="formRules"
+                                        >
+                                            <n-form-item label="账号" path="username">
+                                                <n-input 
+                                                    v-model:value="newAccount.username" 
+                                                    placeholder="输入Steam账号"
+                                                    :disabled="!!newAccount.username"
+                                                />
+                                            </n-form-item>
+                                            <n-form-item label="密码" path="password">
+                                                <n-input 
+                                                    v-model:value="newAccount.password" 
+                                                    type="password"
+                                                    placeholder="输入账号密码"
+                                                    show-password-on="click"
+                                                />
+                                            </n-form-item>
+                                        </n-form>
+                                        <template #footer>
+                                            <n-space justify="end">
+                                                <n-button @click="addDialogVisible = false">
+                                                    取消
+                                                </n-button>
+                                                <n-button 
+                                                    type="primary"
+                                                    :loading="isSubmitting"
+                                                    @click="handleSubmitForm"
+                                                >
+                                                    {{ newAccount.username ? '保存' : '添加' }}
+                                                </n-button>
+                                            </n-space>
+                                        </template>
+                                    </n-card>
+                                </n-modal>
+
+                                <n-modal v-model:show="confirmDialog.visible">
+                                    <n-card
+                                        :title="confirmDialog.title"
+                                        style="width: 400px"
+                                    >
+                                        <template #header-extra>
+                                            <n-tag :type="confirmDialog.type">
+                                                {{ confirmDialog.tag }}
+                                            </n-tag>
+                                        </template>
+                                        <p>{{ confirmDialog.message }}</p>
+                                        <template #footer>
+                                            <n-space justify="end">
+                                                <n-button @click="confirmDialog.visible = false">
+                                                    取消
+                                                </n-button>
+                                                <n-button 
+                                                    :type="confirmDialog.type"
+                                                    :loading="confirmDialog.loading"
+                                                    @click="handleConfirm"
+                                                >
+                                                    确认
+                                                </n-button>
+                                            </n-space>
+                                        </template>
+                                    </n-card>
+                                </n-modal>
+                            </div>
+                        </n-spin>
+                    </n-config-provider>
+                </n-notification-provider>
+            </n-dialog-provider>
+        </n-message-provider>
+    </div>
+
+    <script src="/assets/static/js/app.js"></script>
+</body>
+</html> 
