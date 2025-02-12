@@ -14,6 +14,7 @@ from src.utils.error_codes import ErrorCode
 from src.utils.exceptions import SteamSwitcherException, SteamError, AccountError, FileError
 from functools import wraps
 from src.steam_manager import SteamManager
+from pydantic import BaseModel, ValidationError
 
 api = Blueprint('api', __name__)
 account_manager = AccountManager()
@@ -46,6 +47,7 @@ def handle_errors(f):
     return wrapper
 
 @api.route('/accounts', methods=['GET'])
+@handle_errors
 def get_accounts():
     """获取所有账户信息"""
     try:
@@ -386,14 +388,25 @@ def update_login_time(account):
     account['last_login'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     account_manager.save_accounts()
 
+class AccountSchema(BaseModel):
+    username: str
+    password: str
+    # 其他字段...
+
 @api.route('/api/save_accounts', methods=['POST'])
 def save_accounts():
     """保存账号列表"""
     try:
-        accounts = request.json
+        accounts = [AccountSchema(**acc).dict() for acc in request.json]
         account_manager.accounts = accounts
         account_manager.save_accounts()
         return jsonify({"status": "success"})
+    except ValidationError as e:
+        print(f"数据验证失败: {str(e)}")
+        return jsonify({
+            "status": "error",
+            "message": "数据验证失败"
+        }), 400
     except Exception as e:
         print(f"保存账号列表失败: {str(e)}")
         return jsonify({

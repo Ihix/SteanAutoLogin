@@ -122,6 +122,11 @@ def serve_static(path):
         mimetype=mimetype
     )
 
+@app.route('/test')
+def test():
+    logger.info("测试路由被访问")
+    return "测试成功"
+
 def start_server():
     """启动Flask服务器"""
     try:
@@ -132,12 +137,6 @@ def start_server():
             logger.error(f"Flask错误: {str(e)}", exc_info=True)
             return str(e), 500
         
-        # 添加测试路由
-        @app.route('/test')
-        def test():
-            logger.info("测试路由被访问")
-            return "测试成功"
-            
         app.run(port=5000, host='127.0.0.1', debug=False, use_reloader=False)
     except Exception as e:
         logger.error(f"Flask服务器启动失败: {str(e)}", exc_info=True)

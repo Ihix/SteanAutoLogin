@@ -39,7 +39,11 @@ class SteamManager:
     
     def _get_steam_path(self):
         """从多个位置尝试获取 Steam 路径"""
-        # 1. 从注册表获取
+        # 先检查进程
+        for proc in psutil.process_iter(['name', 'exe']):
+            if proc.info['name'].lower() == 'steam.exe':
+                return proc.info['exe']
+        # 再检查注册表
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.steam_reg_path, 0, 
                                winreg.KEY_READ)
@@ -50,15 +54,7 @@ class SteamManager:
         except WindowsError:
             pass
             
-        # 2. 从进程获取
-        for proc in psutil.process_iter(['name', 'exe']):
-            try:
-                if proc.info['name'].lower() == 'steam.exe':
-                    return proc.info['exe']
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-                
-        # 3. 使用默认路径
+        # 使用默认路径
         default_path = os.path.join(self.default_steam_path, 'Steam.exe')
         if os.path.exists(default_path):
             return default_path
@@ -68,22 +64,23 @@ class SteamManager:
             "未找到Steam客户端,请检查安装"
         )
     
-    def kill_steam_processes(self):
+    def kill_steam_processes(self, retries=3, delay=1):
         """结束所有Steam相关进程"""
         steam_processes = ['steam.exe', 'steamwebhelper.exe', 'steamservice.exe', 'steamloginui.exe']
         killed = []
         
-        for proc in psutil.process_iter(['name', 'pid']):
-            try:
-                if proc.info['name'].lower() in steam_processes:
-                    proc.kill()
-                    killed.append(proc.info['name'])
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
+        for _ in range(retries):
+            for proc in psutil.process_iter(['name', 'pid']):
+                try:
+                    if proc.info['name'].lower() in steam_processes:
+                        proc.kill()
+                        killed.append(proc.info['name'])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
                 
-        if killed:
-            logger.info(f"已结束Steam进程: {', '.join(killed)}")
-            time.sleep(1)  # 等待进程完全结束
+            if killed:
+                logger.info(f"已结束Steam进程: {', '.join(killed)}")
+                time.sleep(delay)
     
     def read_loginusers_vdf(self, force_refresh=False):
         """读取Steam登录用户配置(带缓存)"""

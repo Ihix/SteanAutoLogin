@@ -346,20 +346,22 @@ const app = createApp({
         /**
          * 自动刷新相关函数
          */
-        const throttledRefresh = utils.throttle(() => {
-            loadAccountList(false)
-        }, 5000)
-        
+        let refreshInterval = 30000
         const startAutoRefresh = () => {
-            stopAutoRefresh()
-            refreshTimer.value = setInterval(() => {
-                loadAccountList(false)
-            }, 30000) // 30秒刷新一次
+            refreshTimer.value = setTimeout(() => {
+                loadAccountList().then(() => {
+                    refreshInterval = 30000 // 成功则重置间隔
+                    startAutoRefresh()
+                }).catch(() => {
+                    refreshInterval = Math.min(refreshInterval * 2, 300000) // 失败增加间隔
+                    startAutoRefresh()
+                })
+            }, refreshInterval)
         }
         
         const stopAutoRefresh = () => {
             if (refreshTimer.value) {
-                clearInterval(refreshTimer.value)
+                clearTimeout(refreshTimer.value)
                 refreshTimer.value = null
             }
         }
@@ -401,20 +403,15 @@ const app = createApp({
          * 处理登录错误
          * @param {Object} errorData 错误数据
          */
+        const errorMessages = {
+            2000: '未找到Steam客户端，请检查安装',
+            2001: 'Steam启动失败，请检查进程',
+            3002: '密码错误，请重试'
+        }
+
         const handleLoginError = (errorData) => {
-            switch(errorData.code) {
-                case 2000:
-                    message.error('未找到Steam客户端，请检查安装')
-                    break
-                case 2001:
-                    message.error('Steam启动失败，请检查进程')
-                    break
-                case 3002:
-                    message.error('密码错误，请重试')
-                    break
-                default:
-                    message.error(errorData.message || '登录失败')
-            }
+            const msg = errorMessages[errorData.code] || errorData.message
+            message.error(msg)
         }
 
         const handleAdd = async () => {
