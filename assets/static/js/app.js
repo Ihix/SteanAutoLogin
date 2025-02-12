@@ -273,13 +273,16 @@ const app = createApp({
         // 添加 rowProps 配置
         const rowProps = (row) => {
             return {
-                style: 'cursor: pointer',
+                style: row.isLoggingIn ? 'cursor: wait; opacity: 0.7;' : 'cursor: pointer',
                 onClick: () => {
                     // 可以添加单击行为如果需要
                 },
                 onDblclick: (e) => {
                     e.preventDefault()
                     e.stopPropagation()
+                    if (row.isLoggingIn) {
+                        return
+                    }
                     console.log('双击登录数据:', row)
                     handleLogin(row)
                 },
@@ -633,6 +636,10 @@ const app = createApp({
 
         // 修改登录处理函数
         const handleLogin = async (row) => {
+            // 设置登录状态
+            row.isLoggingIn = true
+            message.loading('正在登录...', 0)  // 持续显示，直到手动关闭
+            
             try {
                 const response = await fetch('/api/login', {
                     method: 'POST',
@@ -641,7 +648,8 @@ const app = createApp({
                     },
                     body: JSON.stringify({
                         username: row.username,
-                        password: row.password
+                        password: row.password,
+                        remember_password: true
                     })
                 })
                 
@@ -654,16 +662,22 @@ const app = createApp({
                         // 其他错误显示详细信息
                         message.error(data.message || '登录失败')
                     }
+                    message.destroyAll()  // 清除 loading 消息
                     return
                 }
                 
+                message.destroyAll()  // 清除 loading 消息
                 message.success('登录成功')
                 if (data.refresh) {
                     await loadAccountList()
                 }
             } catch (error) {
                 console.error('登录失败:', error)
+                message.destroyAll()  // 清除 loading 消息
                 message.error('登录失败')
+            } finally {
+                // 清除登录状态
+                row.isLoggingIn = false
             }
         }
 

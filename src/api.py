@@ -58,8 +58,15 @@ def get_accounts():
         # 检查VDF状态
         account_manager.check_vdf_accounts()
         
+        # 按最近登录时间排序，未登录的排在最后
+        sorted_accounts = sorted(
+            account_manager.accounts,
+            key=lambda x: x.get('last_login', '') or '1970-01-01',
+            reverse=True
+        )
+        
         response_data = {
-            "accounts": account_manager.accounts,
+            "accounts": sorted_accounts,
             "unbanned": unbanned_accounts
         }
         return jsonify(response_data)
@@ -311,12 +318,20 @@ def login_account():
         if account.get('can_quick_switch'):
             if quick_switch_login(username):
                 update_login_time(account)
-                return jsonify({"status": "success", "refresh": True})
+                return jsonify({
+                    "status": "success", 
+                    "refresh": True,
+                    "account": account  # 返回更新后的账号信息
+                })
         
         # 使用密码登录
         if password_login(username, password, remember_password):
             update_login_time(account)
-            return jsonify({"status": "success", "refresh": True})
+            return jsonify({
+                "status": "success", 
+                "refresh": True,
+                "account": account  # 返回更新后的账号信息
+            })
             
         raise AccountError(
             ErrorCode.INVALID_CREDENTIALS,
