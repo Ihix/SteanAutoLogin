@@ -1,28 +1,72 @@
-from enum import Enum
+from enum import Enum, auto
 
 class ErrorCode(Enum):
-    # 通用错误 1000-1999
-    UNKNOWN_ERROR = (1000, "未知错误")
-    INVALID_PARAMS = (1001, "无效的参数")
+    """Steam 相关错误码枚举"""
     
-    # Steam相关错误 2000-2999 
-    STEAM_NOT_FOUND = (2000, "未找到Steam客户端")
-    STEAM_LAUNCH_FAILED = (2001, "Steam启动失败")
-    STEAM_LOGIN_FAILED = (2002, "Steam登录失败")
-    STEAM_CONFIG_ERROR = (2003, "Steam配置错误")
-    STEAM_PROCESS_ERROR = (2004, "Steam进程操作失败")
+    # 通用错误 (1000-1099)
+    UNKNOWN_ERROR = 1000
+    INVALID_PARAMETER = 1001
+    PERMISSION_DENIED = 1002
+    FILE_NOT_FOUND = 1003
     
-    # 账号相关错误 3000-3999
-    ACCOUNT_NOT_FOUND = (3000, "账号不存在")
-    ACCOUNT_EXISTS = (3001, "账号已存在")
-    INVALID_PASSWORD = (3002, "密码错误")
-    ACCOUNT_BANNED = (3003, "账号已被封禁")
+    # Steam 客户端错误 (1100-1199)
+    STEAM_NOT_FOUND = 1100
+    STEAM_LAUNCH_FAILED = 1101
+    STEAM_ALREADY_RUNNING = 1102
+    STEAM_LOGIN_FAILED = 1103
+    STEAM_CONFIG_ERROR = 1104
+    STEAM_MEMORY_ERROR = 1105
     
-    # 文件操作错误 4000-4999
-    FILE_NOT_FOUND = (4000, "文件不存在")
-    FILE_ACCESS_DENIED = (4001, "文件访问被拒绝")
-    FILE_SAVE_FAILED = (4002, "文件保存失败")
+    # 账户相关错误 (1200-1299)
+    ACCOUNT_NOT_FOUND = 1200
+    ACCOUNT_ALREADY_EXISTS = 1201
+    ACCOUNT_DATA_ERROR = 1202
+    INVALID_CREDENTIALS = 1203
     
-    def __init__(self, code, message):
-        self.code = code
-        self.message = message 
+    # 配置相关错误 (1300-1399)
+    CONFIG_NOT_FOUND = 1300
+    CONFIG_PARSE_ERROR = 1301
+    CONFIG_WRITE_ERROR = 1302
+    
+    @property
+    def message(self) -> str:
+        """获取错误码对应的默认错误消息"""
+        return ERROR_MESSAGES.get(self, "未知错误")
+    
+    @property
+    def category(self) -> str:
+        """获取错误类别"""
+        code = self.value
+        if 1000 <= code < 1100:
+            return "通用错误"
+        elif 1100 <= code < 1200:
+            return "Steam客户端错误"
+        elif 1200 <= code < 1300:
+            return "账户错误"
+        elif 1300 <= code < 1400:
+            return "配置错误"
+        return "未知类别"
+
+# 错误码对应的默认错误消息
+ERROR_MESSAGES = {
+    ErrorCode.UNKNOWN_ERROR: "未知错误",
+    ErrorCode.INVALID_PARAMETER: "无效的参数",
+    ErrorCode.PERMISSION_DENIED: "权限不足",
+    ErrorCode.FILE_NOT_FOUND: "文件未找到",
+    
+    ErrorCode.STEAM_NOT_FOUND: "未找到Steam客户端",
+    ErrorCode.STEAM_LAUNCH_FAILED: "Steam启动失败",
+    ErrorCode.STEAM_ALREADY_RUNNING: "Steam已在运行",
+    ErrorCode.STEAM_LOGIN_FAILED: "Steam登录失败",
+    ErrorCode.STEAM_CONFIG_ERROR: "Steam配置错误",
+    ErrorCode.STEAM_MEMORY_ERROR: "Steam内存读取错误",
+    
+    ErrorCode.ACCOUNT_NOT_FOUND: "账户不存在",
+    ErrorCode.ACCOUNT_ALREADY_EXISTS: "账户已存在",
+    ErrorCode.ACCOUNT_DATA_ERROR: "账户数据错误",
+    ErrorCode.INVALID_CREDENTIALS: "无效的登录凭证",
+    
+    ErrorCode.CONFIG_NOT_FOUND: "配置文件不存在",
+    ErrorCode.CONFIG_PARSE_ERROR: "配置文件解析错误",
+    ErrorCode.CONFIG_WRITE_ERROR: "配置文件写入错误",
+} 

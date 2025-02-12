@@ -11,10 +11,9 @@ import vdf  # 需要先 pip install vdf
 import configparser
 from src.utils.logger import setup_logger
 from src.utils.error_codes import ErrorCode
-from src.utils.exceptions import SteamSwitcherException, SteamError, AccountError, FileError
+from src.utils.exceptions import SteamError, AccountError, FileError, ConfigError
 from functools import wraps
 from src.steam_manager import SteamManager
-from pydantic import BaseModel, ValidationError
 
 api = Blueprint('api', __name__)
 account_manager = AccountManager()
@@ -28,26 +27,25 @@ def handle_errors(f):
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
-        except SteamSwitcherException as e:
+        except SteamError as e:  # 使用新的基类异常
             logger.error(f"业务错误: {str(e)}", exc_info=True)
             return jsonify({
                 "status": "error",
-                "code": e.error_code.code,
-                "message": e.error_code.message,
-                "detail": e.detail
+                "code": e.code.value,  # 使用新的错误码格式
+                "message": e.message,
+                "details": e.details  # 使用新的详细信息字段
             }), 400
         except Exception as e:
             logger.error(f"系统错误: {str(e)}", exc_info=True)
             return jsonify({
                 "status": "error",
-                "code": ErrorCode.UNKNOWN_ERROR.code,
+                "code": ErrorCode.UNKNOWN_ERROR.value,
                 "message": ErrorCode.UNKNOWN_ERROR.message,
-                "detail": str(e)
+                "details": {"error": str(e)}
             }), 500
     return wrapper
 
 @api.route('/accounts', methods=['GET'])
-@handle_errors
 def get_accounts():
     """获取所有账户信息"""
     try:
@@ -291,8 +289,8 @@ def login_account():
     
     # 参数验证
     if not username or not password:
-        raise SteamSwitcherException(
-            ErrorCode.INVALID_PARAMS,
+        raise SteamError(
+            ErrorCode.INVALID_PARAMETER,
             "账号和密码不能为空"
         )
     
@@ -321,15 +319,15 @@ def login_account():
             return jsonify({"status": "success", "refresh": True})
             
         raise AccountError(
-            ErrorCode.INVALID_PASSWORD,
+            ErrorCode.INVALID_CREDENTIALS,
             "登录失败,请检查密码"
         )
         
     except Exception as e:
         raise SteamError(
             ErrorCode.STEAM_LOGIN_FAILED,
-            str(e)
-        )
+            "Steam登录失败"
+        ).with_cause(e)
 
 def quick_switch_login(username):
     """快速切换登录
@@ -388,25 +386,14 @@ def update_login_time(account):
     account['last_login'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     account_manager.save_accounts()
 
-class AccountSchema(BaseModel):
-    username: str
-    password: str
-    # 其他字段...
-
 @api.route('/api/save_accounts', methods=['POST'])
 def save_accounts():
     """保存账号列表"""
     try:
-        accounts = [AccountSchema(**acc).dict() for acc in request.json]
+        accounts = request.json
         account_manager.accounts = accounts
         account_manager.save_accounts()
         return jsonify({"status": "success"})
-    except ValidationError as e:
-        print(f"数据验证失败: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": "数据验证失败"
-        }), 400
     except Exception as e:
         print(f"保存账号列表失败: {str(e)}")
         return jsonify({

@@ -90,60 +90,73 @@ def get_base_path():
 
 BASE_DIR = get_base_path()
 
-@app.route('/')
-def index():
-    file_path = os.path.join(BASE_DIR, 'assets', 'index.html')
-    logger.info(f"请求首页, 文件路径: {file_path}")
-    if not os.path.exists(file_path):
-        logger.error(f"首页文件不存在: {file_path}")
-        return "首页文件不存在", 404
-    return send_from_directory(os.path.join(BASE_DIR, 'assets'), 'index.html')
-
-@app.route('/assets/static/<path:path>')
-def serve_static(path):
-    file_path = os.path.join(BASE_DIR, 'assets', 'static', path)
-    logger.info(f"请求静态文件: {file_path}")
-    if not os.path.exists(file_path):
-        logger.error(f"静态文件不存在: {file_path}")
-        return f"文件不存在: {path}", 404
+class FlaskApp:
+    def __init__(self):
+        self.app = Flask(__name__)
+        self.setup_app()
+        
+    def setup_app(self):
+        """配置 Flask 应用"""
+        # 禁用默认日志
+        logging.getLogger('werkzeug').disabled = True
+        self.app.logger.disabled = True
+        self.app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+        self.app.logger.setLevel(logging.ERROR)
+        
+        # 注册蓝图
+        self.app.register_blueprint(api, url_prefix='/api')
+        
+        # 注册路由
+        self.register_routes()
+        
+        # 注册错误处理
+        self.register_error_handlers()
     
-    # 添加正确的 MIME 类型
-    mime_types = {
-        '.js': 'application/javascript',
-        '.css': 'text/css',
-        '.ico': 'image/x-icon',
-    }
-    ext = os.path.splitext(path)[1]
-    mimetype = mime_types.get(ext)
+    def register_routes(self):
+        """注册所有路由"""
+        @self.app.route('/')
+        def index():
+            return send_from_directory(os.path.join(BASE_DIR, 'assets'), 'index.html')
+            
+        @self.app.route('/assets/static/<path:path>')
+        def serve_static(path):
+            mime_types = {
+                '.js': 'application/javascript',
+                '.css': 'text/css',
+                '.ico': 'image/x-icon',
+            }
+            ext = os.path.splitext(path)[1]
+            mimetype = mime_types.get(ext)
+            
+            return send_from_directory(
+                os.path.join(BASE_DIR, 'assets', 'static'),
+                path,
+                mimetype=mimetype
+            )
+            
+        @self.app.route('/test')
+        def test():
+            logger.info("测试路由被访问")
+            return "测试成功"
     
-    return send_from_directory(
-        os.path.join(BASE_DIR, 'assets', 'static'),
-        path,
-        mimetype=mimetype
-    )
-
-@app.route('/test')
-def test():
-    logger.info("测试路由被访问")
-    return "测试成功"
-
-def start_server():
-    """启动Flask服务器"""
-    try:
-        logger.info("Flask服务器正在启动...")
-        # 添加异常处理中间件
-        @app.errorhandler(Exception)
+    def register_error_handlers(self):
+        """注册错误处理器"""
+        @self.app.errorhandler(Exception)
         def handle_exception(e):
             logger.error(f"Flask错误: {str(e)}", exc_info=True)
             return str(e), 500
-        
-        app.run(port=5000, host='127.0.0.1', debug=False, use_reloader=False)
-    except Exception as e:
-        logger.error(f"Flask服务器启动失败: {str(e)}", exc_info=True)
-        raise
-    finally:
-        logger.info("Flask服务器线程结束")
-        flask_started.set()
+            
+    def run(self, host='127.0.0.1', port=5000):
+        """运行 Flask 应用"""
+        try:
+            logger.info("Flask服务器正在启动...")
+            self.app.run(host=host, port=port, debug=False, use_reloader=False)
+        except Exception as e:
+            logger.error(f"Flask服务器启动失败: {str(e)}", exc_info=True)
+            raise
+        finally:
+            logger.info("Flask服务器线程结束")
+            flask_started.set()
 
 def wait_for_server(timeout=10):
     """等待服务器启动"""
@@ -214,45 +227,82 @@ def ensure_static_files():
         logger.error(f"确保静态文件时出错: {str(e)}", exc_info=True)
         return False
 
-if __name__ == '__main__':
-    window = None
+class WebViewManager:
+    def __init__(self):
+        self.window = None
+        
+    def create_window(self, title, url, width=800, height=600):
+        """创建 WebView 窗口"""
+        try:
+            logger.info("正在创建主窗口...")
+            self.window = webview.create_window(
+                title,
+                url,
+                width=width,
+                height=height
+            )
+            logger.info("窗口创建成功")
+            return self.window
+        except Exception as e:
+            logger.error(f"创建窗口失败: {str(e)}", exc_info=True)
+            raise
+            
+    def start(self, debug=True):
+        """启动 WebView"""
+        try:
+            logger.info("准备启动WebView...")
+            webview.start(debug=False)
+            logger.info("WebView已退出")
+        except Exception as e:
+            logger.error(f"启动WebView失败: {str(e)}", exc_info=True)
+            raise
+            
+    def cleanup(self):
+        """清理资源"""
+        if self.window:
+            try:
+                self.window.destroy()
+            except Exception as e:
+                logger.error(f"关闭窗口失败: {str(e)}", exc_info=True)
+
+def main():
+    """主程序入口"""
+    webview_manager = None
     try:
         # 设置日志
         setup_logging()
         logger.info("=== Steam Account Switcher 启动 ===")
         
-        # ... 其他初始化代码 ...
-        
-        # 启动 Flask 服务器
-        logger.info("正在启动Flask服务器...")
-        server_thread = threading.Thread(target=start_server)
+        # 确保静态文件
+        if not ensure_static_files():
+            raise RuntimeError("静态文件检查失败")
+            
+        # 创建并启动 Flask 应用
+        flask_app = FlaskApp()
+        server_thread = threading.Thread(
+            target=flask_app.run,
+            kwargs={'host': '127.0.0.1', 'port': 5000}
+        )
         server_thread.daemon = True
         server_thread.start()
-        logger.info("Flask服务器线程已启动")
         
         # 等待服务器就绪
         if not wait_for_server(timeout=10):
             raise RuntimeError("Flask服务器启动失败")
-        
-        # 创建窗口
-        logger.info("正在创建主窗口...")
-        window = webview.create_window(
+            
+        # 创建并启动 WebView
+        webview_manager = WebViewManager()
+        webview_manager.create_window(
             'Steam Account Switcher',
-            'http://127.0.0.1:5000',
-            width=800,
-            height=600
+            'http://127.0.0.1:5000'
         )
-        logger.info("窗口创建成功，准备启动WebView...")
-        
-        # 启动WebView
-        webview.start(debug=False)
-        logger.info("WebView已退出")
+        webview_manager.start()
         
     except Exception as e:
         logger.error("程序出错", exc_info=True)
-        if window:
-            try:
-                window.destroy()
-            except:
-                pass
-        sys.exit(1) 
+        if webview_manager:
+            webview_manager.cleanup()
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main() 

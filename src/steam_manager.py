@@ -1,9 +1,11 @@
 import os
+from pathlib import Path
 import psutil
 import winreg
 import time
 import subprocess
 import vdf
+from functools import cached_property
 from src.utils.logger import setup_logger
 from src.utils.error_codes import ErrorCode
 from src.utils.exceptions import SteamError
@@ -24,11 +26,20 @@ class SteamManager:
     
     def __init__(self):
         self.steam_reg_path = r"Software\Valve\Steam"
-        self.default_steam_path = r"C:\Program Files (x86)\Steam"
+        self.default_steam_path = Path(r"C:\Program Files (x86)\Steam")
         self._steam_path = None
         self._vdf_cache = {}
         self._last_vdf_check = 0
+        self.config = self._load_config()
         self.memory_offset = self._get_memory_offset()
+    
+    def _load_config(self):
+        """加载配置文件"""
+        config = configparser.ConfigParser()
+        config.read('config/config.ini', encoding='utf-8')
+        if not config.has_section('Steam'):
+            config.add_section('Steam')
+        return config
     
     @property
     def steam_path(self):
@@ -39,48 +50,45 @@ class SteamManager:
     
     def _get_steam_path(self):
         """从多个位置尝试获取 Steam 路径"""
-        # 先检查进程
-        for proc in psutil.process_iter(['name', 'exe']):
-            if proc.info['name'].lower() == 'steam.exe':
-                return proc.info['exe']
-        # 再检查注册表
+        # 1. 从配置文件获取
+        if self.config.has_option('Steam', 'steam_path'):
+            path = Path(self.config.get('Steam', 'steam_path'))
+            if path.exists():
+                return str(path)
+        
+        # 2. 从注册表获取
         try:
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.steam_reg_path, 0, 
                                winreg.KEY_READ)
-            path = winreg.QueryValueEx(key, "SteamExe")[0]
+            path = Path(winreg.QueryValueEx(key, "SteamExe")[0])
             winreg.CloseKey(key)
-            if os.path.exists(path):
-                return path
+            if path.exists():
+                return str(path)
         except WindowsError:
             pass
             
-        # 使用默认路径
-        default_path = os.path.join(self.default_steam_path, 'Steam.exe')
-        if os.path.exists(default_path):
-            return default_path
+        # 3. 从进程获取
+        for proc in psutil.process_iter(['name', 'exe']):
+            try:
+                if proc.info['name'].lower() == 'steam.exe':
+                    return proc.info['exe']
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+                
+        # 4. 使用默认路径
+        default_exe = self.default_steam_path / 'Steam.exe'
+        if default_exe.exists():
+            return str(default_exe)
             
         raise SteamError(
             ErrorCode.STEAM_NOT_FOUND,
             "未找到Steam客户端,请检查安装"
         )
     
-    def kill_steam_processes(self, retries=3, delay=1):
-        """结束所有Steam相关进程"""
-        steam_processes = ['steam.exe', 'steamwebhelper.exe', 'steamservice.exe', 'steamloginui.exe']
-        killed = []
-        
-        for _ in range(retries):
-            for proc in psutil.process_iter(['name', 'pid']):
-                try:
-                    if proc.info['name'].lower() in steam_processes:
-                        proc.kill()
-                        killed.append(proc.info['name'])
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-                
-            if killed:
-                logger.info(f"已结束Steam进程: {', '.join(killed)}")
-                time.sleep(delay)
+    @cached_property
+    def loginusers_vdf_path(self):
+        """获取 loginusers.vdf 文件路径"""
+        return Path(self.steam_path).parent / 'config' / 'loginusers.vdf'
     
     def read_loginusers_vdf(self, force_refresh=False):
         """读取Steam登录用户配置(带缓存)"""
@@ -91,14 +99,13 @@ class SteamManager:
             return self._vdf_cache
             
         try:
-            vdf_path = os.path.join(os.path.dirname(self.steam_path), 'config', 'loginusers.vdf')
-            if not os.path.exists(vdf_path):
+            if not self.loginusers_vdf_path.exists():
                 raise SteamError(
                     ErrorCode.STEAM_CONFIG_ERROR,
-                    f"未找到登录配置文件: {vdf_path}"
+                    f"未找到登录配置文件: {self.loginusers_vdf_path}"
                 )
                 
-            with open(vdf_path, 'r', encoding='utf-8') as f:
+            with open(self.loginusers_vdf_path, 'r', encoding='utf-8') as f:
                 data = vdf.load(f)
                 self._vdf_cache = data.get('users', {})
                 self._last_vdf_check = current_time
@@ -109,6 +116,101 @@ class SteamManager:
                 ErrorCode.STEAM_CONFIG_ERROR,
                 f"读取登录配置失败: {str(e)}"
             )
+    
+    def launch_steam(self, username=None, password=None, **kwargs):
+        """启动Steam客户端
+        
+        Args:
+            username: 可选,指定登录用户名
+            password: 可选,指定登录密码
+            **kwargs: 其他命令行参数
+                remember_password (bool): 是否记住密码
+                silent (bool): 是否静默启动
+                no_browser (bool): 是否禁用内置浏览器
+                tcp_port (int): 指定TCP端口
+        """
+        cmd = [self.steam_path]
+        
+        # 添加登录参数
+        if username and password:
+            cmd.extend(['-login', username, password])
+            if kwargs.get('remember_password', True):
+                cmd.append('-remember_password')
+        
+        # 添加其他可选参数
+        if kwargs.get('silent'):
+            cmd.append('-silent')
+        if kwargs.get('no_browser'):
+            cmd.append('-no-browser')
+        if kwargs.get('tcp_port'):
+            cmd.extend(['-tcp_port', str(kwargs['tcp_port'])])
+        
+        # 添加自定义参数
+        for key, value in kwargs.items():
+            if key not in ['remember_password', 'silent', 'no_browser', 'tcp_port']:
+                if isinstance(value, bool) and value:
+                    cmd.append(f'-{key}')
+                elif value is not None:
+                    cmd.extend([f'-{key}', str(value)])
+        
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+            )
+            
+            time.sleep(0.5)
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise SteamError(
+                    ErrorCode.STEAM_LAUNCH_FAILED,
+                    f"Steam启动失败: {stderr.decode()}"
+                )
+            
+            return process
+            
+        except Exception as e:
+            raise SteamError(
+                ErrorCode.STEAM_LAUNCH_FAILED,
+                f"启动Steam失败: {str(e)}"
+            )
+    
+    def _get_memory_offset(self):
+        """从配置文件读取内存偏移量"""
+        try:
+            memory_addr = self.config.get('Steam', 'memory_addr', fallback='steamui.dll+CC0E31')
+            
+            # 解析格式 "steamui.dll+CC0E31"
+            if '+' in memory_addr:
+                _, offset = memory_addr.split('+')
+                # 移除可能存在的空格并转换为整数
+                return int(offset.strip(), 16)
+            else:
+                logger.warning(f"内存地址格式不正确: {memory_addr}，使用默认值")
+                return 0xCC0E31
+            
+        except Exception as e:
+            logger.error(f"读取内存偏移量配置失败: {str(e)}")
+            return 0xCC0E31  # 使用默认值
+
+    def kill_steam_processes(self):
+        """结束所有Steam相关进程"""
+        steam_processes = ['steam.exe', 'steamwebhelper.exe', 'steamservice.exe', 'steamloginui.exe']
+        killed = []
+        
+        for proc in psutil.process_iter(['name', 'pid']):
+            try:
+                if proc.info['name'].lower() in steam_processes:
+                    proc.kill()
+                    killed.append(proc.info['name'])
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+                
+        if killed:
+            logger.info(f"已结束Steam进程: {', '.join(killed)}")
+            time.sleep(1)  # 等待进程完全结束
     
     def check_steam_config(self):
         """检查Steam配置文件状态"""
@@ -149,64 +251,6 @@ class SteamManager:
                 f"设置自动登录失败: {str(e)}"
             )
     
-    def launch_steam(self, username=None, password=None, remember_password=True):
-        """启动Steam客户端
-        
-        Args:
-            username: 可选,指定登录用户名
-            password: 可选,指定登录密码
-            remember_password: 是否记住密码
-        """
-        cmd = [self.steam_path]
-        if username and password:
-            cmd.extend(['-login', username, password])
-            if remember_password:
-                cmd.append('-remember_password')
-        
-        try:
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
-            )
-            
-            time.sleep(0.5)
-            if process.poll() is not None:
-                stdout, stderr = process.communicate()
-                raise SteamError(
-                    ErrorCode.STEAM_LAUNCH_FAILED,
-                    f"Steam启动失败: {stderr.decode()}"
-                )
-            
-            return process
-            
-        except Exception as e:
-            raise SteamError(
-                ErrorCode.STEAM_LAUNCH_FAILED,
-                f"启动Steam失败: {str(e)}"
-            )
-    
-    def _get_memory_offset(self):
-        """从配置文件读取内存偏移量"""
-        try:
-            config = configparser.ConfigParser()
-            config.read('config/config.ini', encoding='utf-8')
-            memory_addr = config.get('Steam', 'memory_addr', fallback='steamui.dll+CC0E31')
-            
-            # 解析格式 "steamui.dll+CC0E31"
-            if '+' in memory_addr:
-                _, offset = memory_addr.split('+')
-                # 移除可能存在的空格并转换为整数
-                return int(offset.strip(), 16)
-            else:
-                logger.warning(f"内存地址格式不正确: {memory_addr}，使用默认值")
-                return 0xCC0E31
-            
-        except Exception as e:
-            logger.error(f"读取内存偏移量配置失败: {str(e)}")
-            return 0xCC0E31  # 使用默认值
-
     def monitor_steam_memory(self):
         """监控 steamui.dll 特定地址的内存内容"""
         try:
