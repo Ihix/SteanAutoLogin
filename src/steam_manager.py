@@ -240,9 +240,15 @@ class SteamManager:
     def set_auto_login_user(self, username):
         """设置Steam自动登录用户"""
         try:
-            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, self.steam_reg_path, 0, 
-                               winreg.KEY_SET_VALUE)
+            # 需要同时设置 AutoLoginUser 和 RememberPassword
+            key = winreg.CreateKeyEx(
+                winreg.HKEY_CURRENT_USER, 
+                self.steam_reg_path, 
+                0, 
+                winreg.KEY_SET_VALUE
+            )
             winreg.SetValueEx(key, "AutoLoginUser", 0, winreg.REG_SZ, username)
+            winreg.SetValueEx(key, "RememberPassword", 0, winreg.REG_DWORD, 1)
             winreg.CloseKey(key)
             return True
         except Exception as e:

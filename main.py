@@ -10,6 +10,7 @@ import threading
 import time
 from src.utils.logger import setup_logger
 import traceback
+import configparser
 
 # 禁用 Flask 默认的日志输出
 logging.getLogger('werkzeug').disabled = True
@@ -163,6 +164,9 @@ def wait_for_server(timeout=10):
     start_time = time.time()
     logger.info("等待Flask服务器启动...")
     
+    retry_interval = 0.5  # 初始重试间隔
+    max_interval = 2.0    # 最大重试间隔
+    
     while time.time() - start_time < timeout:
         try:
             import requests
@@ -171,8 +175,10 @@ def wait_for_server(timeout=10):
                 logger.info("Flask服务器已就绪")
                 return True
         except requests.exceptions.RequestException as e:
-            logger.debug(f"等待中... ({str(e)})")
-            time.sleep(0.5)
+            logger.debug(f"等待中... ({str(e)}) 下次重试间隔: {retry_interval}秒")
+            time.sleep(retry_interval)
+            # 指数增加重试间隔,但不超过最大值
+            retry_interval = min(retry_interval * 2, max_interval)
             
     logger.error(f"等待Flask服务器超时 ({timeout}秒)")
     return False
@@ -251,7 +257,13 @@ class WebViewManager:
         """启动 WebView"""
         try:
             logger.info("准备启动WebView...")
-            webview.start(debug=False)
+            # 从配置文件读取debug选项
+            config = configparser.ConfigParser()
+            config.read('config/config.ini', encoding='utf-8')
+            enable_debug = config.getboolean('General', 'enable_webview_debug', fallback=False)
+            
+            logger.info(f"WebView debug模式: {'启用' if enable_debug else '禁用'}")
+            webview.start(debug=enable_debug)
             logger.info("WebView已退出")
         except Exception as e:
             logger.error(f"启动WebView失败: {str(e)}", exc_info=True)
@@ -272,12 +284,17 @@ def main():
         # 设置日志
         setup_logging()
         logger.info("=== Steam Account Switcher 启动 ===")
+        logger.info("正在初始化系统...")
         
         # 确保静态文件
+        logger.info("检查静态文件...")
         if not ensure_static_files():
+            logger.error("静态文件检查失败,程序无法继续运行")
             raise RuntimeError("静态文件检查失败")
-            
+        logger.info("静态文件检查完成")
+        
         # 创建并启动 Flask 应用
+        logger.info("正在启动Flask服务...")
         flask_app = FlaskApp()
         server_thread = threading.Thread(
             target=flask_app.run,
@@ -287,19 +304,25 @@ def main():
         server_thread.start()
         
         # 等待服务器就绪
+        logger.info("等待Flask服务就绪...")
         if not wait_for_server(timeout=10):
+            logger.error("Flask服务启动失败,程序无法继续运行")
             raise RuntimeError("Flask服务器启动失败")
-            
+        logger.info("Flask服务已就绪")
+        
         # 创建并启动 WebView
+        logger.info("正在创建主窗口...")
         webview_manager = WebViewManager()
         webview_manager.create_window(
             'Steam Account Switcher',
             'http://127.0.0.1:5000'
         )
+        logger.info("正在启动WebView...")
         webview_manager.start()
         
     except Exception as e:
-        logger.error("程序出错", exc_info=True)
+        logger.error(f"程序运行出错: {str(e)}", exc_info=True)
+        logger.error(f"错误详情: {traceback.format_exc()}")
         if webview_manager:
             webview_manager.cleanup()
         sys.exit(1)
