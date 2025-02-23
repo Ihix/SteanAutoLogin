@@ -45,7 +45,29 @@ def handle_errors(f):
             }), 500
     return wrapper
 
+def with_retry(max_retries=3, retry_delay=1):
+    """API 重试装饰器"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_error = e
+                    logger.warning(f"API调用失败 (第{attempt + 1}次): {str(e)}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                    continue
+            # 所有重试都失败后，抛出最后一个错误
+            raise last_error
+        return wrapper
+    return decorator
+
 @api.route('/accounts', methods=['GET'])
+@handle_errors
+@with_retry(max_retries=3)
 def get_accounts():
     """获取所有账户信息"""
     try:
@@ -66,16 +88,17 @@ def get_accounts():
         )
         
         response_data = {
+            "status": "success",
             "accounts": sorted_accounts,
             "unbanned": unbanned_accounts
         }
         return jsonify(response_data)
     except Exception as e:
-        logger.error(f"获取账号信息失败: {str(e)}")
-        return jsonify({
-            "status": "error",
-            "message": "获取账号信息失败"
-        }), 500
+        logger.error(f"获取账号信息失败: {str(e)}", exc_info=True)
+        raise SteamError(
+            ErrorCode.ACCOUNT_DATA_ERROR,
+            "获取账号信息失败，请检查网络连接"
+        ).with_cause(e)
 
 @api.route('/accounts', methods=['POST'])
 def add_account():
@@ -131,18 +154,30 @@ def set_ban_time(username):
         }), 500
 
 @api.route('/accounts/<username>/game_id', methods=['PUT'])
+@handle_errors
+@with_retry(max_retries=3)
 def update_game_id(username):
     """更新账户的游戏ID"""
-    data = request.json
-    game_id = data.get('game_id', '')
-    
-    for account in account_manager.accounts:
-        if account['username'] == username:
-            account['game_id'] = game_id
-            break
+    try:
+        data = request.json
+        game_id = data.get('game_id', '')
+        
+        if not account_manager.update_game_id(username, game_id):
+            raise AccountError(
+                ErrorCode.ACCOUNT_NOT_FOUND,
+                f"未找到账号: {username}"
+            )
             
-    account_manager.save_accounts()
-    return jsonify({"status": "success"})
+        return jsonify({
+            "status": "success",
+            "message": "游戏ID更新成功"
+        })
+    except Exception as e:
+        logger.error(f"更新游戏ID失败: {str(e)}", exc_info=True)
+        raise SteamError(
+            ErrorCode.ACCOUNT_DATA_ERROR,
+            "设置失败，请稍后重试"
+        ).with_cause(e)
 
 @api.route('/accounts/<username>', methods=['PUT'])
 def update_account(username):
@@ -287,33 +322,34 @@ def check_login_status(username, max_wait=30):
 
 @api.route('/login', methods=['POST'])
 @handle_errors
+@with_retry(max_retries=3)
 def login_account():
     """处理账号登录请求"""
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')
-    remember_password = data.get('remember_password', True)
-    
-    # 参数验证
-    if not username or not password:
-        raise SteamError(
-            ErrorCode.INVALID_PARAMETER,
-            "账号和密码不能为空"
-        )
-    
-    # 账号验证
-    account = next(
-        (acc for acc in account_manager.accounts 
-         if acc['username'] == username),
-        None
-    )
-    if not account:
-        raise AccountError(
-            ErrorCode.ACCOUNT_NOT_FOUND,
-            f"账号 {username} 不存在"
-        )
-    
     try:
+        data = request.get_json()
+        username = data.get('username')
+        password = data.get('password')
+        remember_password = data.get('remember_password', True)
+        
+        # 参数验证
+        if not username or not password:
+            raise SteamError(
+                ErrorCode.INVALID_PARAMETER,
+                "账号和密码不能为空"
+            )
+        
+        # 账号验证
+        account = next(
+            (acc for acc in account_manager.accounts 
+             if acc['username'] == username),
+            None
+        )
+        if not account:
+            raise AccountError(
+                ErrorCode.ACCOUNT_NOT_FOUND,
+                f"账号 {username} 不存在"
+            )
+        
         # 尝试快速切换
         if account.get('can_quick_switch'):
             if quick_switch_login(username):
@@ -321,7 +357,7 @@ def login_account():
                 return jsonify({
                     "status": "success", 
                     "refresh": True,
-                    "account": account  # 返回更新后的账号信息
+                    "account": account
                 })
         
         # 使用密码登录
@@ -330,18 +366,19 @@ def login_account():
             return jsonify({
                 "status": "success", 
                 "refresh": True,
-                "account": account  # 返回更新后的账号信息
+                "account": account
             })
             
         raise AccountError(
             ErrorCode.INVALID_CREDENTIALS,
-            "登录失败,请检查密码"
+            "登录失败，请检查密码或网络连接"
         )
         
     except Exception as e:
+        logger.error(f"登录失败: {str(e)}", exc_info=True)
         raise SteamError(
             ErrorCode.STEAM_LOGIN_FAILED,
-            "Steam登录失败"
+            "登录失败，请检查网络连接或重试"
         ).with_cause(e)
 
 def quick_switch_login(username):

@@ -306,57 +306,121 @@ const app = createApp({
             })
         }
 
-        /**
-         * 加载账号列表(带防抖)
-         * @param {boolean} isInitialLoad 是否为首次加载
-         */
-        const loadAccountList = utils.debounce(async (isInitialLoad = false) => {
-            if (loading.value) return
-            
+        // 添加网络状态检查函数
+        function checkNetworkConnection() {
+            return navigator.onLine;
+        }
+
+        // 添加重试函数
+        async function retryRequest(requestFn, maxRetries = 3, retryDelay = 1000) {
+            let lastError;
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+                try {
+                    if (!checkNetworkConnection()) {
+                        throw new Error('网络连接已断开');
+                    }
+                    return await requestFn();
+                } catch (error) {
+                    lastError = error;
+                    if (attempt < maxRetries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, retryDelay));
+                        continue;
+                    }
+                }
+            }
+            throw lastError;
+        }
+
+        // 修改加载账号列表的函数
+        async function loadAccounts() {
             try {
-                loading.value = true
-                const response = await fetch('/api/accounts')
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`)
-                }
-                const data = await response.json()
-                
-                if (data.status === 'error') {
-                    message.error(data.message || '加载失败')
-                    return
-                }
-                
-                accounts.value = data.accounts || []
-                
-                // 检查解封通知
-                if (isInitialLoad && data.unbanned?.length > 0) {
-                    notification.success({
-                        title: '账号解封提醒',
-                        content: data.unbanned.length === 1
-                            ? `账号 ${data.unbanned[0]} 已解除封禁`
-                            : `${data.unbanned.length}个账号已解除封禁：\n${data.unbanned.join(', ')}`,
-                        duration: 5000
-                    })
+                const response = await retryRequest(async () => {
+                    const res = await fetch('/api/accounts');
+                    if (!res.ok) throw new Error('加载失败');
+                    return res.json();
+                });
+
+                if (response.status === 'success') {
+                    accounts.value = response.accounts;
+                    if (response.unbanned && response.unbanned.length > 0) {
+                        message.success(`${response.unbanned.length}个账号已解封`);
+                    }
+                } else {
+                    throw new Error(response.message || '加载失败');
                 }
             } catch (error) {
-                console.error('加载失败:', error)
-                message.error('加载失败，请检查网络连接')
-            } finally {
-                loading.value = false
+                console.error('加载账号失败:', error);
+                message.error(error.message || '加载失败，请检查网络连接');
             }
-        }, 300)
+        }
+
+        // 修改更新游戏ID的函数
+        async function updateGameId(username, gameId) {
+            try {
+                const response = await retryRequest(async () => {
+                    const res = await fetch(`/api/accounts/${username}/game_id`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ game_id: gameId }),
+                    });
+                    if (!res.ok) throw new Error('设置失败');
+                    return res.json();
+                });
+
+                if (response.status === 'success') {
+                    message.success('设置成功');
+                    await loadAccounts();  // 刷新账号列表
+                } else {
+                    throw new Error(response.message || '设置失败');
+                }
+            } catch (error) {
+                console.error('设置游戏ID失败:', error);
+                message.error(error.message || '设置失败，请稍后重试');
+            }
+        }
+
+        // 修改登录函数
+        async function login(username, password) {
+            try {
+                const response = await retryRequest(async () => {
+                    const res = await fetch('/api/login', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ username, password }),
+                    });
+                    if (!res.ok) throw new Error('登录失败');
+                    return res.json();
+                });
+
+                if (response.status === 'success') {
+                    message.success('登录成功');
+                    if (response.refresh) {
+                        await loadAccounts();  // 刷新账号列表
+                    }
+                } else {
+                    throw new Error(response.message || '登录失败');
+                }
+            } catch (error) {
+                console.error('登录失败:', error);
+                message.error(error.message || '登录失败，请检查网络连接或重试');
+            }
+        }
 
         /**
          * 自动刷新相关函数
          */
         const throttledRefresh = utils.throttle(() => {
-            loadAccountList(false)
+            loadAccounts()
         }, 5000)
         
         const startAutoRefresh = () => {
             stopAutoRefresh()
             refreshTimer.value = setInterval(() => {
-                loadAccountList(false)
+                loadAccounts()
             }, 30000) // 30秒刷新一次
         }
         
@@ -375,21 +439,15 @@ const app = createApp({
             try {
                 stopAutoRefresh()
                 
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(account)
-                })
+                const response = await login(account.username, account.password)
                 
-                const data = await response.json()
-                
-                if (!response.ok) {
-                    handleLoginError(data)
+                if (response.status === 'error') {
+                    handleLoginError(response)
                     return
                 }
 
-                if (data.refresh) {
-                    await loadAccountList()
+                if (response.refresh) {
+                    await loadAccounts()
                 }
                 message.success('登录成功')
                 
@@ -445,7 +503,7 @@ const app = createApp({
                 
                 addDialogVisible.value = false;
                 newAccount.value = { username: '', password: '' };
-                await loadAccountList();
+                await loadAccounts();
                 message.success(isEdit ? '账号已更新' : '账号添加成功');
             } catch (error) {
                 message.error(isEdit ? '更新失败，请重试' : '添加失败，请重试');
@@ -462,7 +520,7 @@ const app = createApp({
                     try {
                         await API.deleteAccount(account.username)
                         message.success('账号已删除')
-                        await loadAccountList()
+                        await loadAccounts()
                     } catch (error) {
                         message.error('删除失败，请重试')
                     }
@@ -480,7 +538,7 @@ const app = createApp({
                     try {
                         await API.setBanTime(account.username, days)
                         message.success('设置成功')
-                        await loadAccountList()
+                        await loadAccounts()
                     } catch (error) {
                         message.error('设置失败')
                     }
@@ -490,21 +548,17 @@ const app = createApp({
 
         const handleGameIdChange = async (account, newValue) => {
             try {
-                const response = await fetch(`/api/accounts/${account.username}/game_id`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ game_id: newValue })
-                });
+                const response = await updateGameId(account.username, newValue)
                 
-                if (!response.ok) {
-                    throw new Error('保存失败');
+                if (response.status === 'error') {
+                    throw new Error(response.message || '保存失败');
                 }
                 
                 account.game_id = newValue;
                 message.success('游戏ID已更新');
             } catch (error) {
                 message.error('保存失败，请重试');
-                await loadAccountList();  // 出错时重新加载数据
+                await loadAccounts();  // 出错时重新加载数据
             }
         }
 
@@ -641,26 +695,15 @@ const app = createApp({
             message.loading('正在登录...', 0)  // 持续显示，直到手动关闭
             
             try {
-                const response = await fetch('/api/login', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        username: row.username,
-                        password: row.password,
-                        remember_password: true
-                    })
-                })
+                const response = await login(row.username, row.password)
                 
-                const data = await response.json()
-                if (data.status === 'error') {
+                if (response.status === 'error') {
                     // 如果是密码登录超时，只显示简单提示
-                    if (data.code === ErrorCode.STEAM_LOGIN_FAILED.code) {
+                    if (response.code === ErrorCode.STEAM_LOGIN_FAILED.code) {
                         message.error('登录失败')
                     } else {
                         // 其他错误显示详细信息
-                        message.error(data.message || '登录失败')
+                        message.error(response.message || '登录失败')
                     }
                     message.destroyAll()  // 清除 loading 消息
                     return
@@ -668,8 +711,8 @@ const app = createApp({
                 
                 message.destroyAll()  // 清除 loading 消息
                 message.success('登录成功')
-                if (data.refresh) {
-                    await loadAccountList()
+                if (response.refresh) {
+                    await loadAccounts()
                 }
             } catch (error) {
                 console.error('登录失败:', error)
@@ -706,13 +749,13 @@ const app = createApp({
                 if (document.hidden) {
                     stopAutoRefresh()
                 } else {
-                    loadAccountList()
+                    loadAccounts()
                     startAutoRefresh()
                 }
             })
 
             try {
-                await loadAccountList(true)
+                await loadAccounts()
                 startAutoRefresh()
             } catch (error) {
                 console.error('初始化失败:', error)

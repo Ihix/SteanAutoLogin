@@ -260,47 +260,65 @@ class SteamManager:
     def monitor_steam_memory(self):
         """监控 steamui.dll 特定地址的内存内容"""
         try:
+            logger.debug("开始监控 Steam 内存...")
             pm = pymem.Pymem("steam.exe")
+            logger.debug("已成功打开 Steam 进程")
+            
             dll = pymem.process.module_from_name(pm.process_handle, "steamui.dll")
             if not dll:
+                logger.warning("未找到 steamui.dll 模块，可能会影响登录检测")
                 return None
                 
             base_address = dll.lpBaseOfDll
             target_address = base_address + self.memory_offset
+            logger.debug(f"内存地址: base={hex(base_address)}, offset={hex(self.memory_offset)}, target={hex(target_address)}")
+            
             memory_bytes = pm.read_bytes(target_address - 20, 61)
+            logger.debug(f"读取内存数据: 长度={len(memory_bytes)} 字节")
+            
             string_value = memory_bytes.decode('ascii', errors='replace')
+            logger.debug(f"解析内存内容: {string_value}")
             
             return string_value
             
         except Exception as e:
-            logger.debug(f"读取内存失败: {str(e)}")
+            logger.error(f"读取内存失败: {str(e)}", exc_info=True)
             return None
 
     def check_login_success(self, username, max_wait=10):
         """通过监控内存来判断登录状态"""
-        logger.info(f"开始检查登录状态: {username}")
+        logger.info(f"开始检查登录状态: 用户={username}, 超时={max_wait}秒")
         start_time = time.time()
         check_interval = 0.5
         last_content = None
+        attempt_count = 0
 
         while time.time() - start_time < max_wait:
             try:
-                content = self.monitor_steam_memory()
+                attempt_count += 1
+                logger.debug(f"第 {attempt_count} 次检查登录状态")
                 
+                content = self.monitor_steam_memory()
+                if content is None:
+                    logger.warning("无法读取内存内容，等待重试...")
+                    time.sleep(check_interval)
+                    continue
+
                 # 如果内容发生变化，记录日志
                 if content != last_content:
-                    logger.debug(f"内存内容: {content}")
+                    logger.debug(f"内存内容已更新: {content}")
                     last_content = content
 
                 if content and username.lower() in content.lower():
-                    logger.info(f"检测到登录成功: {username}")
+                    logger.info(f"登录成功: 用户={username}, 耗时={time.time() - start_time:.2f}秒")
                     return True
 
+                logger.debug(f"未检测到登录成功，继续等待...")
                 time.sleep(check_interval)
                 
             except Exception as e:
-                logger.error(f"检查登录状态失败: {str(e)}")
+                logger.error(f"检查登录状态出错: {str(e)}", exc_info=True)
                 time.sleep(check_interval)
 
-        logger.warning(f"等待登录超时: {username}")
+        logger.warning(f"登录超时: 用户={username}, 已等待={max_wait}秒")
         return False 
